@@ -1,0 +1,6 @@
+aws_region   = "eu-central-1"
+project_name = "social-medias"
+environment  = "dev"
+
+# Daily at 01:05 UTC — ingests previous calendar day (UTC)
+hn_ingest_schedule = "cron(5 1 * * ? *)"
