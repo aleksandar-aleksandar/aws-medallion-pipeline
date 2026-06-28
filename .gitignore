@@ -2,8 +2,10 @@
 .terraform/
 *.tfstate
 *.tfstate.*
+!infrastructure/terraform/terraform.tfstate
 *.tfvars
 !*.tfvars.example
+!infrastructure/terraform/terraform.tfvars
 .terraform.lock.hcl
 crash.log
 override.tf
@@ -29,3 +31,7 @@ Thumbs.db
 # Large datasets (upload to S3 manually)
 data/x/raw/*
 !data/x/raw/.gitkeep
+data/silver-payload*.json
+data/silver-invoke-response*.json
+data/gold-payload*.json
+data/gold-invoke-response*.json
