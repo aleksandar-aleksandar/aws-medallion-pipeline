@@ -1,0 +1,56 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: medallion-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: medallion
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: medallion
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medallion -d medallion"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  superset:
+    image: apache/superset:3.1.3
+    container_name: medallion-superset
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD}
+    volumes:
+      - superset_home:/app/superset_home
+    command:
+      - /bin/sh
+      - -c
+      - |
+        superset db upgrade
+        superset fab create-admin \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --email admin@medallion.local \
+          --password "$SUPERSET_ADMIN_PASSWORD" || true
+        superset init
+        exec gunicorn \
+          --bind 0.0.0.0:8088 \
+          --workers 1 \
+          --timeout 120 \
+          "superset.app:create_app()"
+
+volumes:
+  pgdata:
+  superset_home:

@@ -7,9 +7,103 @@ Course project: collect, normalize, transform, and visualize data from **Hacker 
 | Source        | Mechanism                                      | S3 path                                      |
 |---------------|------------------------------------------------|----------------------------------------------|
 | Hacker News   | Lambda (daily) → Algolia API, raw JSON pages   | `bronze/hackernews/content_date=YYYY-MM-DD/` |
-| X (Twitter)   | Manual upload of static dataset (raw, unchanged) | `bronze/x/<dataset>/`                     |
+| X (Twitter)   | Manual upload of static dataset (raw, unchanged) | `bronze/x/dataset=<name>/raw/`             |
 
 **Bronze rules:** no flattening, no HTML cleanup, no schema changes — only raw landing in S3.
+
+## Silver layer (implemented)
+
+| Input | Output | Mechanism |
+|-------|--------|-----------|
+| HN bronze JSON pages | `silver/users/` (partition `platform_partition`) | Lambda + awswrangler |
+| X bronze CSV (tweet schema) | `silver/posts/` (partition `year/month/day`) | same Lambda |
+
+**Tables:** `users` (`user_id`, `username`, `platform`, `karma_score`, `follower_count`, `is_verified`, `created_at`) and `posts` (`post_id`, `author_username`, `content_text`, `created_at`, `post_type`, `platform`, plus flattened HN refs).
+
+**Normalization:** HTML strip, UTC timestamps, dedupe, nested HN `kids`/`children`/`parts` flattened to `child_ids`.
+
+**Schedule:** EventBridge daily **02:30 UTC** (after bronze at 01:05 UTC).
+
+**Manual invoke:**
+
+```powershell
+.\scripts\invoke_silver.ps1
+.\scripts\invoke_silver.ps1 -ContentDate "2026-05-28"
+.\scripts\invoke_silver.ps1 -NoX   # HN only
+```
+
+**Local test** (download bronze first or use `--s3`):
+
+```powershell
+py scripts\silver_normalize_local.py --s3 --bucket social-medias-dev-datalake-263112802384 --date 2026-05-28
+```
+
+Verify:
+
+```powershell
+aws s3 ls s3://<bucket>/silver/ --recursive
+```
+
+## Gold layer (implemented)
+
+Reads silver Parquet, computes spec metrics/KPIs, writes partitioned gold tables under `gold/`.
+
+| Gold table | What it contains |
+|------------|------------------|
+| `daily_hn_post_counts` | Per-day counts: story, ask, comment, job, poll |
+| `daily_active_users` | Distinct active authors per platform per day |
+| `daily_users_metric` | `total_users`, `new_users` per platform per day |
+| `top_x_users_by_followers` | Top 10 X users by `follower_count` |
+| `top_hn_users_by_karma_high` / `_low` | Top/bottom 10 HN users (karma from HN API) |
+| `top_hn_jobs_by_score` | Top 10 HN jobs by `points` |
+| `top_hn_posts_by_score` | Top 10 HN stories/asks/polls by `points` |
+| `data_quality_score` | % non-null cells in silver `users` + `posts` |
+
+**Schedule:** EventBridge daily **03:00 UTC** (after silver).
+
+**Manual invoke:**
+
+```powershell
+.\scripts\invoke_gold.ps1
+.\scripts\invoke_gold.ps1 -MetricDate "2026-05-28"
+```
+
+Verify:
+
+```powershell
+aws s3 ls s3://<bucket>/gold/ --recursive
+```
+
+## Visualization (implemented)
+
+| Component | Role |
+|-----------|------|
+| EC2 + Docker | PostgreSQL + Apache Superset |
+| `gold-to-postgres` Lambda | Loads gold Parquet → Postgres (`gold` schema) |
+| Superset | Charts from Postgres tables |
+
+**After deploy**, wait ~10 min for Docker bootstrap, then:
+
+```powershell
+.\scripts\invoke_gold_load.ps1
+terraform -chdir=infrastructure\terraform output superset_url
+terraform -chdir=infrastructure\terraform output -raw superset_admin_password
+```
+
+Setup guide: [docs/SUPERSET.md](docs/SUPERSET.md)
+
+## Notifications (implemented)
+
+CloudWatch alarms on all pipeline Lambdas → SNS → Discord webhook when **Errors > 0**.
+
+1. Add webhook to `infrastructure/terraform/terraform.tfvars`:
+   ```hcl
+   discord_webhook_url = "https://discord.com/api/webhooks/..."
+   ```
+2. `terraform apply`
+3. Test: `.\scripts\test_discord_notify.ps1`
+
+Monitored Lambdas: bronze HN, silver, gold, gold-to-postgres.
 
 ## Prerequisites
 
@@ -96,15 +190,17 @@ python scripts\test_hn_fetch.py --date 2026-05-27 --tag story
 
 ```text
 lambdas/hn_bronze_ingest/     # HN bronze Lambda (Python)
-infrastructure/terraform/     # IaC: VPC, S3, Lambda, EventBridge
+lambdas/silver_normalize/     # Silver normalize Lambda (Python + awswrangler layer)
+lambdas/gold_transform/       # Gold metrics Lambda (Python + awswrangler layer)
+lambdas/gold_to_postgres/     # Gold S3 → PostgreSQL load Lambda
+infrastructure/ec2/           # Docker Compose for Superset + Postgres
+infrastructure/terraform/     # IaC: VPC, S3, Lambda, EventBridge, EC2
 scripts/                      # invoke, upload, local test helpers
+docs/SUPERSET.md              # Superset connection + chart guide
 data/x/raw/                   # place Twitter datasets before upload
-project-specification.md      # full assignment
+project_spec.md               # full assignment
 ```
 
 ## Next steps (not yet implemented)
 
-- **Silver:** normalize to Parquet (`users`, `posts`), awswrangler, partitioning.
-- **Gold:** daily metrics/KPIs, star schema.
-- **Visualization:** Superset + PostgreSQL on EC2, load Lambda.
-- **Notifications:** Discord on failed jobs.
+_All major spec sections are implemented. Optional polish: tighten `superset_allowed_cidr` to your IP, stop EC2 when not demoing._

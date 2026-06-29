@@ -4,3 +4,6 @@ environment  = "dev"
 
 # Daily at 01:05 UTC — ingests previous calendar day (UTC)
 hn_ingest_schedule = "cron(5 1 * * ? *)"
+
+# Discord alerts for failed pipeline Lambdas (create webhook in Server Settings → Integrations)
+# discord_webhook_url = "https://discord.com/api/webhooks/..."

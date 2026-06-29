@@ -1,0 +1,1 @@
+{"status": "ok", "tables_loaded": {"daily_hn_post_counts": 5, "daily_active_users": 2, "daily_users_metric": 2, "top_x_users_by_followers": 10, "top_hn_users_by_karma_high": 10, "top_hn_users_by_karma_low": 10, "top_hn_jobs_by_score": 1, "top_hn_posts_by_score": 10, "data_quality_score": 3}, "tables_skipped": [], "postgres_schema": "gold"}

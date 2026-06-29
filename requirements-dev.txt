@@ -1,0 +1,5 @@
+# Local dev / silver_normalize_local.py (optional)
+pandas>=2.0
+pyarrow>=14.0
+awswrangler>=3.5
+boto3>=1.34
