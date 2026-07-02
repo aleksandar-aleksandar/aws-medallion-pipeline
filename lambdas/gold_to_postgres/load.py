@@ -20,6 +20,62 @@ GOLD_TABLES: tuple[str, ...] = (
     "data_quality_score",
 )
 
+# Top-N tables are written per metric date; Postgres should expose one snapshot for charts.
+LATEST_DATE_TABLES: frozenset[str] = frozenset(
+    {
+        "top_x_users_by_followers",
+        "top_hn_users_by_karma_high",
+        "top_hn_users_by_karma_low",
+        "top_hn_jobs_by_score",
+        "top_hn_posts_by_score",
+    }
+)
+
+
+def _latest_date_slice(df: Any, *, limit: int | None = None) -> Any:
+    if df.empty or "date" not in df.columns:
+        return df
+    dates = df["date"].astype(str)
+    latest = dates.max()
+    sliced = df[dates == latest].copy()
+    if limit is not None and len(sliced) > limit:
+        if "rank" in sliced.columns:
+            sliced = sliced.sort_values("rank").head(limit)
+        else:
+            sliced = sliced.head(limit)
+    logger.info("Keeping latest date=%s (%s rows)", latest, len(sliced))
+    return sliced
+
+
+def _normalize_gold_frame(df: Any, table: str) -> Any:
+    import pandas as pd
+
+    if df.empty:
+        return df
+    if table in {"top_hn_users_by_karma_high", "top_hn_users_by_karma_low"} and "karma_score" in df.columns:
+        df = df.copy()
+        df["karma_score"] = pd.to_numeric(df["karma_score"], errors="coerce")
+    return df
+
+
+def _read_gold_parquet(path: str, table: str) -> Any:
+    import awswrangler as wr
+
+    try:
+        return wr.s3.read_parquet(path=path, dataset=True)
+    except Exception as exc:
+        if "incompatible types" not in str(exc).lower():
+            raise
+        logger.warning("Partition schema mismatch for %s, reading files individually", table)
+        files = wr.s3.list_objects(path)
+        parquet_files = [f for f in files if f.endswith(".parquet")]
+        if not parquet_files:
+            raise
+        frames = [wr.s3.read_parquet(path=f) for f in parquet_files]
+        import pandas as pd
+
+        return pd.concat(frames, ignore_index=True)
+
 
 def _pg_connect() -> Any:
     import pg8000
@@ -57,7 +113,7 @@ def load_gold_to_postgres(*, bucket: str, gold_prefix: str) -> dict[str, Any]:
         for table in GOLD_TABLES:
             path = f"s3://{bucket}/{gold_prefix}/{table}/"
             try:
-                df = wr.s3.read_parquet(path=path, dataset=True)
+                df = _read_gold_parquet(path, table)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Skip table %s (read failed): %s", table, exc)
                 skipped.append(table)
@@ -66,6 +122,25 @@ def load_gold_to_postgres(*, bucket: str, gold_prefix: str) -> dict[str, Any]:
             if df.empty:
                 skipped.append(table)
                 continue
+
+            df = _normalize_gold_frame(df, table)
+
+            if table in LATEST_DATE_TABLES:
+                row_limit = 10 if table.startswith("top_") else None
+                df = _latest_date_slice(df, limit=row_limit)
+
+            if table in {"top_hn_users_by_karma_high", "top_hn_users_by_karma_low"} and not df.empty:
+                import pandas as pd
+
+                df = df.copy()
+                if "date" in df.columns:
+                    df["_date_key"] = df["date"].astype(str)
+                    df = df.sort_values(["_date_key", "rank"], ascending=[False, True]).drop(
+                        columns=["_date_key"]
+                    )
+                else:
+                    df = df.sort_values("rank")
+                df = df.drop_duplicates(subset=["rank"], keep="first").head(10)
 
             wr.postgresql.to_sql(
                 df=df,

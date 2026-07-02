@@ -129,7 +129,7 @@ def top_hn_users_by_karma(
     hn_active = enriched[
         (enriched["platform"] == PLATFORM_HN) & (enriched["username"].isin(active_authors))
     ].copy()
-    hn_active["karma_score"] = pd.to_numeric(hn_active["karma_score"], errors="coerce")
+    hn_active["karma_score"] = pd.to_numeric(hn_active["karma_score"], errors="coerce").astype("float64")
     hn_active = hn_active.dropna(subset=["karma_score"]).sort_values("karma_score", ascending=ascending)
     top = hn_active.drop_duplicates(subset=["username"]).head(limit).copy()
     top["date"] = date_str(metric_date)
